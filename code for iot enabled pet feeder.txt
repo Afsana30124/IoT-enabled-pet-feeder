@@ -1,0 +1,107 @@
+// code for iot enabled pet feeder
+#include <WiFi.h>
+#include <FirebaseESP32.h>
+#include <Servo.h>
+#include <TimeLib.h>
+
+// Wi-Fi and Firebase configuration
+#define WIFI_SSID "your_wifi_ssid"
+#define WIFI_PASSWORD "your_wifi_password"
+#define FIREBASE_HOST "your_firebase_database_url"
+#define FIREBASE_AUTH "your_firebase_database_secret"
+
+// Initialize Firebase
+FirebaseData firebaseData;
+
+// Initialize Servo
+Servo feederServo;
+const int servoPin = 13;  // Pin connected to servo
+const int feedingInterval = 60000; // Check interval in milliseconds
+const int feedDuration = 2000; // Duration to dispense food in milliseconds
+
+// Feeding schedule (example: "HH:MM")
+String feedingTime = "";
+bool feedNow = false;
+
+void setup() {
+    Serial.begin(115200);
+    feederServo.attach(servoPin);
+
+    // Connect to Wi-Fi
+    connectToWiFi();
+
+    // Connect to Firebase
+    Firebase.begin(FIREBASE_HOST, FIREBASE_AUTH);
+    Firebase.reconnectWiFi(true);
+
+    // Retrieve feeding schedule from Firebase
+    getFeedingTime();
+}
+
+void loop() {
+    // Check if it's time to feed
+    if (shouldFeed()) {
+        feedPet();
+    }
+
+    // Update feeding time periodically
+    if (millis() % feedingInterval < 1000) {
+        getFeedingTime();
+    }
+
+    delay(1000); // Main loop delay
+}
+
+void connectToWiFi() {
+    Serial.println("Connecting to WiFi...");
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.println("Connected to WiFi");
+}
+
+void getFeedingTime() {
+    if (Firebase.getString(firebaseData, "/feedingTime")) {
+        feedingTime = firebaseData.dataString();
+        Serial.print("Feeding time retrieved: ");
+        Serial.println(feedingTime);
+    } else {
+        Serial.print("Error getting feeding time: ");
+        Serial.println(firebaseData.errorReason());
+    }
+}
+
+bool shouldFeed() {
+    // Get current time
+    int currentHour = hour();
+    int currentMinute = minute();
+
+    // Parse feeding time
+    int feedHour = feedingTime.substring(0, 2).toInt();
+    int feedMinute = feedingTime.substring(3, 5).toInt();
+
+    // Check if it's time to feed
+    return (currentHour == feedHour && currentMinute == feedMinute && !feedNow);
+}
+
+void feedPet() {
+    Serial.println("Feeding pet...");
+    feederServo.write(90); // Adjust angle for dispensing food
+    delay(feedDuration); // Feed duration
+    feederServo.write(0); // Reset position
+
+    // Notify Firebase that feeding has occurred
+    if (Firebase.setBool(firebaseData, "/lastFeeding", true)) {
+        Serial.println("Feeding recorded in Firebase.");
+    } else {
+        Serial.print("Error recording feeding: ");
+        Serial.println(firebaseData.errorReason());
+    }
+
+    // Set flag to prevent multiple feedings
+    feedNow = true;
+    delay(60000); // Wait 1 minute before allowing next feeding
+    feedNow = false; // Reset feeding flag
+}
